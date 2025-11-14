@@ -108,7 +108,7 @@ function enablePanAndZoom(container) {
         panY = translateMatch ? parseFloat(translateMatch[2]) : 0;
     }
     
-    function updateTransform() { panel.style.transform = `scale(${scale}) translate(${panX}px, ${panY}px)`; }
+    function updateTransform() { panel.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`; }
 
     function onMouseDown(e) { if (e.target.closest('.jsmind-node') || e.target.hasAttribute('nodeid') || e.target.classList.contains('jsmind-editor-input')) return; if (e.button !== 0) return; isPanning = true; container.classList.add('grabbing'); startX = e.clientX; startY = e.clientY; getTransformValues(); e.preventDefault(); }    function onMouseMove(e) { if (!isPanning) return; const dx = e.clientX - startX, dy = e.clientY - startY; panX += dx; panY += dy; startX = e.clientX; startY = e.clientY; updateTransform(); e.preventDefault(); }    function onMouseUp(e) { if (!isPanning) return; isPanning = false; container.classList.remove('grabbing'); e.preventDefault(); }    function onWheel(e) { e.preventDefault(); getTransformValues(); const rect = container.getBoundingClientRect(), mouseX = e.clientX - rect.left, mouseY = e.clientY - rect.top; const oldScale = scale, delta = e.deltaY > 0 ? 0.9 : 1.1; scale = Math.max(0.1, Math.min(5, scale * delta)); panX = mouseX - (mouseX - panX) * (scale / oldScale); panY = mouseY - (mouseY - panY) * (scale / oldScale); updateTransform(); }    function onTouchStart(e) { if (e.target.closest('.jsmind-node') || e.target.hasAttribute('nodeid') || e.target.classList.contains('jsmind-editor-input')) return; getTransformValues(); if (e.touches.length === 1) { isPanning = true; container.classList.add('grabbing'); startX = e.touches[0].clientX; startY = e.touches[0].clientY; } else if (e.touches.length === 2) { isPanning = false; const t1 = e.touches[0], t2 = e.touches[1]; lastTouchDistance = Math.sqrt(Math.pow(t1.clientX - t2.clientX, 2) + Math.pow(t1.clientY - t2.clientY, 2)); } e.preventDefault(); }    function onTouchMove(e) { e.preventDefault(); if (e.touches.length === 1 && isPanning) { const touch = e.touches[0], dx = touch.clientX - startX, dy = touch.clientY - startY; panX += dx; panY += dy; startX = touch.clientX; startY = touch.clientY; updateTransform(); } else if (e.touches.length === 2) { const t1 = e.touches[0], t2 = e.touches[1]; const currentTouchDistance = Math.sqrt(Math.pow(t1.clientX - t2.clientX, 2) + Math.pow(t1.clientY - t2.clientY, 2)); const rect = container.getBoundingClientRect(), centerX = (t1.clientX + t2.clientX) / 2 - rect.left, centerY = (t1.clientY + t2.clientY) / 2 - rect.top; const oldScale = scale, delta = currentTouchDistance / lastTouchDistance; scale = Math.max(0.1, Math.min(5, scale * delta)); panX = centerX - (centerX - panX) * (scale / oldScale); panY = centerY - (centerY - panY) * (scale / oldScale); lastTouchDistance = currentTouchDistance; updateTransform(); } }     function onTouchEnd(e) { if (isPanning) { isPanning = false; container.classList.remove('grabbing'); } if (e.touches.length < 2) { lastTouchDistance = 0; } }    container.addEventListener('mousedown', onMouseDown); container.addEventListener('mousemove', onMouseMove); document.addEventListener('mouseup', onMouseUp);    container.addEventListener('wheel', onWheel, { passive: false });    container.addEventListener('touchstart', onTouchStart, { passive: false }); container.addEventListener('touchmove', onTouchMove, { passive: false }); container.addEventListener('touchend', onTouchEnd); 
 }
@@ -143,19 +143,151 @@ function nodeToMarkdown(node, depth = 1) {
   return md; 
 }
 
-function exportToMarkdown(jm) { 
-  const mindData = jm.get_data('node_tree'); 
-  if (!mindData || !mindData.data) { 
-    alert('沒有可以匯出的心智圖資料'); 
-    return; 
-  } 
-  const markdown = nodeToMarkdown(mindData.data), 
-        title = (mindData.data.topic || 'mindmap').replace(/<[^>]+>/g, ''); 
-  const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' }); 
-  const link = document.createElement('a'); 
-  link.href = URL.createObjectURL(blob); 
-  link.download = title + '.md'; 
-  link.click(); 
+function exportToMarkdown(jm) {
+  const mindData = jm.get_data('node_tree');
+  if (!mindData || !mindData.data) {
+    alert('沒有可以匯出的心智圖資料');
+    return;
+  }
+  const markdown = nodeToMarkdown(mindData.data),
+        title = (mindData.data.topic || 'mindmap').replace(/<[^>]+>/g, '');
+  const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = title + '.md';
+  link.click();
+}
+
+function expandAllNodes(jm) {
+  const rootNode = jm.get_root();
+  const expandNode = (node) => {
+    if (node && !node.isroot) {
+      jm.expand_node(node.id);
+    }
+    if (node && node.children) {
+      node.children.forEach(child => expandNode(child));
+    }
+  };
+  expandNode(rootNode);
+}
+
+function exportToPNG(jm, showNotificationFn) {
+  const mindData = jm.get_data('node_tree');
+  if (!mindData || !mindData.data) {
+    showNotificationFn('沒有可以匯出的心智圖資料', true);
+    return;
+  }
+
+  const title = (mindData.data.topic || 'mindmap').replace(/<[^>]+>/g, '');
+
+  // 顯示處理中的通知
+  showNotificationFn('正在展開所有節點並截圖...');
+
+  // 展開所有節點
+  expandAllNodes(jm);
+
+  // 等待DOM更新後進行截圖
+  setTimeout(() => {
+    const container = document.getElementById('jsmind_container');
+    const jsmindInner = container.querySelector('.jsmind-inner');
+
+    if (!jsmindInner) {
+      showNotificationFn('找不到心智圖內容', true);
+      return;
+    }
+
+    // 保存原始樣式
+    const originalContainerOverflow = container.style.overflow;
+    const originalContainerWidth = container.style.width;
+    const originalContainerHeight = container.style.height;
+    const originalInnerTransform = jsmindInner.style.transform;
+
+    try {
+      // 暫時移除 transform，讓元素回到原始位置
+      jsmindInner.style.transform = 'none';
+
+      // 取得心智圖的實際邊界
+      const bbox = jsmindInner.getBoundingClientRect();
+
+      // 計算實際內容的寬高（考慮所有子元素）
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      const nodes = jsmindInner.querySelectorAll('jmnode, jmnodes');
+      nodes.forEach(node => {
+        const rect = node.getBoundingClientRect();
+        const innerRect = jsmindInner.getBoundingClientRect();
+        const relativeLeft = rect.left - innerRect.left;
+        const relativeTop = rect.top - innerRect.top;
+        minX = Math.min(minX, relativeLeft);
+        minY = Math.min(minY, relativeTop);
+        maxX = Math.max(maxX, relativeLeft + rect.width);
+        maxY = Math.max(maxY, relativeTop + rect.height);
+      });
+
+      // 加上邊距
+      const padding = 50;
+      const contentWidth = maxX - minX + padding * 2;
+      const contentHeight = maxY - minY + padding * 2;
+
+      // 暫時調整容器樣式以顯示完整內容
+      container.style.overflow = 'visible';
+      container.style.width = contentWidth + 'px';
+      container.style.height = contentHeight + 'px';
+
+      // 調整 jsmindInner 的位置，確保所有內容都在可見區域內
+      jsmindInner.style.transform = `translate(${padding - minX}px, ${padding - minY}px)`;
+
+      // 使用 requestAnimationFrame 確保樣式已應用
+      requestAnimationFrame(() => {
+        // 使用html2canvas截圖
+        html2canvas(jsmindInner, {
+          backgroundColor: '#ecf0f1',
+          scale: 2, // 提高解析度
+          logging: false,
+          useCORS: true,
+          allowTaint: true,
+          width: contentWidth,
+          height: contentHeight,
+          windowWidth: contentWidth,
+          windowHeight: contentHeight,
+          x: 0,
+          y: 0
+        }).then(canvas => {
+          // 恢復原始樣式
+          container.style.overflow = originalContainerOverflow;
+          container.style.width = originalContainerWidth;
+          container.style.height = originalContainerHeight;
+          jsmindInner.style.transform = originalInnerTransform;
+
+          // 將canvas轉換為blob並下載
+          canvas.toBlob((blob) => {
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = title + '.png';
+            link.click();
+            showNotificationFn('PNG 圖片已下載！');
+          }, 'image/png');
+        }).catch(err => {
+          // 恢復原始樣式
+          container.style.overflow = originalContainerOverflow;
+          container.style.width = originalContainerWidth;
+          container.style.height = originalContainerHeight;
+          jsmindInner.style.transform = originalInnerTransform;
+
+          console.error('截圖失敗:', err);
+          showNotificationFn('截圖失敗，請稍後再試', true);
+        });
+      });
+    } catch (error) {
+      // 確保發生錯誤時也能恢復樣式
+      container.style.overflow = originalContainerOverflow;
+      container.style.width = originalContainerWidth;
+      container.style.height = originalContainerHeight;
+      jsmindInner.style.transform = originalInnerTransform;
+
+      console.error('準備截圖時發生錯誤:', error);
+      showNotificationFn('截圖準備失敗，請稍後再試', true);
+    }
+  }, 500); // 等待500ms讓節點完全展開
 }
 
 // --- Main Logic ---
@@ -654,6 +786,7 @@ document.addEventListener('keydown',(e)=>{
     link.click(); 
   };
   document.getElementById('btn_export_md').onclick = () => { exportToMarkdown(jm); };
+  document.getElementById('btn_download_png').onclick = () => { exportToPNG(jm, showNotification); };
 
   // --- Hyperlink & Image Logic ---
 
